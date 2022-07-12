@@ -1,16 +1,121 @@
-:auto LOAD CSV WITH HEADERS FROM "https://raw.githubusercontent.com/RRajdev/data/main/synbritain_people.csv" AS row WITH row LIMIT 1
+:auto LOAD CSV WITH HEADERS FROM "https://raw.githubusercontent.com/RRajdev/data/main/synbritain_people.csv" AS row WITH row LIMIT 2
 CALL {
 WITH row
 CREATE (p:Person {id: apoc.create.uuid(), familyName: COALESCE(row.FAMILYNAME, 'NOT SET'), givenName: COALESCE(row.FIRSTNAME, 'NOT SET'),  dob: COALESCE(row.DOB, 'NOT SET')})
-FOREACH (ignoreMe in CASE WHEN exists(row.FAMILYNAME) AND row.FAMILYNAME <> ""  THEN [1] ELSE [] END | MERGE (fn:FAMILYNAME {value: row.FAMILYNAME}) MERGE (p)-[:HAS_FAMILY_NAME]->(fn))
-FOREACH (ignoreMe in CASE WHEN exists(row.FIRSTNAME) AND row.FIRSTNAME <> ""  THEN [1] ELSE [] END | MERGE (gn:GIVENNAME {value: row.FIRSTNAME}) MERGE (p)-[:HAS_GIVEN_NAME]->(gn))
+FOREACH (ignoreMe in CASE WHEN exists(row.FAMILYNAME) AND row.FAMILYNAME <> ""  THEN [1] ELSE [] END | MERGE (fn:FamilyName {value: row.FAMILYNAME}) MERGE (p)-[:HAS_FAMILY_NAME {weight: 4}]->(fn))
+FOREACH (ignoreMe in CASE WHEN exists(row.FIRSTNAME) AND row.FIRSTNAME <> ""  THEN [1] ELSE [] END | MERGE (gn:GivenName {value: row.FIRSTNAME}) MERGE (p)-[:HAS_GIVEN_NAME { weight: 3}]->(gn))
 FOREACH (ignoreMe in CASE WHEN exists(row.DOB) AND row.DOB <> ""  THEN [1] ELSE [] END | MERGE (dob:DOB {value: row.DOB}) MERGE (p)-[:HAS_DOB]->(dob))
 CREATE (i:Identity {id: apoc.create.uuid(), nino: COALESCE(row.NINO)})
 MERGE (p)-[:HAS_IDENTITY]->(i)
 FOREACH (ignoreMe in CASE WHEN exists(row.NINO) AND row.NINO <> ""  THEN [1] ELSE [] END | MERGE (nino:NINO {value: row.NINO}) MERGE (i)-[:HAS_NINO]->(nino))
-CREATE (a:Address {id: apoc.create.uuid(), description: COALESCE(row.ADDRESS_LINE_1, 'NOT SET') + "," + COALESCE(row.TOWN, 'NOT SET') + "," +
+CREATE (a:Address {id: apoc.create.uuid(), description: COALESCE(row.ADDRESS_LINE_1, 'NOT SET') + "," + COALESCE(row.TOWN, 'NOT SET') + "," +  
 COALESCE(row.COUNTRY_ID, 'NOT SET') + "," + COALESCE(row.POSTCODE, 'NOT SET')})
 MERGE (p)-[:HAS_ADDRESS]->(a)
 FOREACH (ignoreMe in CASE WHEN exists(row.POSTCODE) AND row.POSTCODE <> ""  THEN [1] ELSE [] END | MERGE (pc:Postcode {value: row.POSTCODE}) MERGE (a)-[:HAS_POSTCODE]->(pc))
 FOREACH (ignoreMe in CASE WHEN exists(row.ADDRESS_LINE_1) AND row.ADDRESS_LINE_1<> ""  THEN [1] ELSE [] END | MERGE (al:AddressLine1 {value: row.ADDRESS_LINE_1}) MERGE (a)-[:HAS_POSTCODE]->(al))
 } IN TRANSACTIONS OF 100 ROWS
+
+
+
+MATCH (p1:Person)-[hasFn1:HAS_GIVEN_NAME]->(givenName)
+MATCH (p2:Person)-[hasFn2:HAS_GIVEN_NAME]->(givenName2) WHERE p1 <> p2
+WITH p1, collect([hasFn1.score) AS p1L, p2, collect(hasFn2.score) AS p2L
+RETURN p1.name AS from, p2.name AS to,
+   gds.alpha.similarity.cosine(p1L, p2L) AS cosine;
+
+
+   CALL gds.graph.drop('famiyNameGraph', false) YIELD graphName;
+
+
+
+   CALL gds . Graph .create('person', 
+['familyName', 'givenName', 'DOB'], '*')
+
+
+CALL gds.graph.project(
+    'person',
+    ['familyName', 'givenName', 'DOB'], '*'
+);
+
+
+CALL gds.graph.project(
+  'person-graph',
+  {
+    givenName: { properties: 'value' },    
+    familyName: {properties: 'value'}, 
+    dob: {properties: 'value'}                       
+  },
+  {
+    HAS_FIRST_NAME: {}, 
+    HAS_FAMILY_NAME: {}, 
+    HAS_DOB                      
+  }
+  )
+
+CALL gds . Graph .create('person', 
+['familyName', 'givenName', 'DOB'],'[*]')
+
+
+CALL gds.graph.project(
+    'person',
+    ['Person', 'GivenName', 'FamilyName', 'DOB'],
+    {
+        HAS_GIVEN_NAME: {
+            type: 'HAS_GIVEN_NAME',
+            orientation: 'NATURAL',
+            properties: {
+                strength: {
+                    property: 'weight',
+                    defaultValue: 3.0
+                }
+            }
+        },
+        HAS_FAMILY_NAME: {
+            type: 'HAS_FAMILY_NAME',
+            orientation: 'NATURAL',
+            properties: {
+                strength: {
+                    property: 'weight',
+                    defaultValue: 5.0
+                }
+            }
+        }, 
+        HAS_DOB: {
+            type: 'HAS_DOB',
+            orientation: 'NATURAL',
+            properties: {
+                strength: {
+                    property: 'weight',
+                    defaultValue: 7.0
+                }
+            }
+        }
+
+    }
+);
+
+CALL gds.nodeSimilarity.stream('firstNameGraph')
+YIELD node1, node2, similarity
+RETURN gds.util.asNode(node1).givenName AS Person1, 
+       gds.util.asNode(node2).givenName AS Person2, similarity
+ORDER BY similarity DESCENDING, Person1, Person2
+
+
+
+CALL gds.nodeSimilarity.stream('person',
+    {
+    similarityCutoff: 0
+  }
+)
+YIELD node1, node2, similarity
+RETURN gds.util.asNode(node1).familyName AS Person1, 
+       gds.util.asNode(node2).familyName AS Person2, similarity
+ORDER BY similarity DESCENDING, Person1, Person2
+
+
+CALL gds.nodeSimilarity.write('person', {
+    writeRelationshipType: 'SIMILAR',
+    writeProperty: 'score'
+})
+YIELD nodesCompared, relationshipsWritten
+
