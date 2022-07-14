@@ -1,19 +1,54 @@
-:auto LOAD CSV WITH HEADERS FROM "https://raw.githubusercontent.com/RRajdev/data/main/synbritain_people.csv" AS row WITH row LIMIT 2
+:auto LOAD CSV WITH HEADERS FROM "https://raw.githubusercontent.com/RRajdev/data/main/synbritain_people.csv" AS row 
 CALL {
 WITH row
-CREATE (p:Person {id: apoc.create.uuid(), familyName: COALESCE(row.FAMILYNAME, 'NOT SET'), givenName: COALESCE(row.FIRSTNAME, 'NOT SET'),  dob: COALESCE(row.DOB, 'NOT SET')})
-FOREACH (ignoreMe in CASE WHEN exists(row.FAMILYNAME) AND row.FAMILYNAME <> ""  THEN [1] ELSE [] END | MERGE (fn:FamilyName {value: row.FAMILYNAME}) MERGE (p)-[:HAS_FAMILY_NAME {weight: 4}]->(fn))
-FOREACH (ignoreMe in CASE WHEN exists(row.FIRSTNAME) AND row.FIRSTNAME <> ""  THEN [1] ELSE [] END | MERGE (gn:GivenName {value: row.FIRSTNAME}) MERGE (p)-[:HAS_GIVEN_NAME { weight: 3}]->(gn))
-FOREACH (ignoreMe in CASE WHEN exists(row.DOB) AND row.DOB <> ""  THEN [1] ELSE [] END | MERGE (dob:DOB {value: row.DOB}) MERGE (p)-[:HAS_DOB]->(dob))
+CREATE (p:Person {id: apoc.create.uuid(), personId: COALESCE(row.PERSON_ID, 'NOT SET'), familyName: COALESCE(row.FAMILYNAME, 'NOT SET'), givenName: COALESCE(row.FIRSTNAME, 'NOT SET'),  dob: COALESCE(row.DOB, 'NOT SET'), postcode: COALESCE(row.POSTCODE, 'NOT SET'), nino: COALESCE(row.NINO, 'NOT SET')})
+FOREACH (ignoreMe in CASE WHEN exists(row.FAMILYNAME) AND row.FAMILYNAME <> ""  THEN [1] ELSE [] END | MERGE (fn:FamilyName {value: row.FAMILYNAME}))
+FOREACH (ignoreMe in CASE WHEN exists(row.FIRSTNAME) AND row.FIRSTNAME <> ""  THEN [1] ELSE [] END | MERGE (gn:GivenName {value: row.FIRSTNAME}))
+FOREACH (ignoreMe in CASE WHEN exists(row.DOB) AND row.DOB <> ""  THEN [1] ELSE [] END | MERGE (dob:DOB {value: row.DOB}))
+} IN TRANSACTIONS OF 100 ROWS
+
+
+//load NINO 
+:auto LOAD CSV WITH HEADERS FROM "https://raw.githubusercontent.com/RRajdev/data/main/synbritain_people.csv" AS row WITH row LIMIT 512800
+CALL {
+WITH row
+MATCH (p:Person {personId:row.PERSON_ID})
 CREATE (i:Identity {id: apoc.create.uuid(), nino: COALESCE(row.NINO)})
 MERGE (p)-[:HAS_IDENTITY]->(i)
 FOREACH (ignoreMe in CASE WHEN exists(row.NINO) AND row.NINO <> ""  THEN [1] ELSE [] END | MERGE (nino:NINO {value: row.NINO}) MERGE (i)-[:HAS_NINO]->(nino))
+} IN TRANSACTIONS OF 100 ROWS
+
+
+//load Addresses 
+:auto LOAD CSV WITH HEADERS FROM "file:///synbritain_people.csv" AS row WITH row LIMIT 1
+CALL {
+WITH row
+MATCH (p:Person {personId:row.PERSON_ID})
 CREATE (a:Address {id: apoc.create.uuid(), description: COALESCE(row.ADDRESS_LINE_1, 'NOT SET') + "," + COALESCE(row.TOWN, 'NOT SET') + "," +  
 COALESCE(row.COUNTRY_ID, 'NOT SET') + "," + COALESCE(row.POSTCODE, 'NOT SET')})
 MERGE (p)-[:HAS_ADDRESS]->(a)
-FOREACH (ignoreMe in CASE WHEN exists(row.POSTCODE) AND row.POSTCODE <> ""  THEN [1] ELSE [] END | MERGE (pc:Postcode {value: row.POSTCODE}) MERGE (a)-[:HAS_POSTCODE]->(pc))
-FOREACH (ignoreMe in CASE WHEN exists(row.ADDRESS_LINE_1) AND row.ADDRESS_LINE_1<> ""  THEN [1] ELSE [] END | MERGE (al:AddressLine1 {value: row.ADDRESS_LINE_1}) MERGE (a)-[:HAS_POSTCODE]->(al))
+FOREACH (ignoreMe in CASE WHEN exists(row.POSTCODE) AND row.POSTCODE <> ""  THEN [1] ELSE [] END | MERGE (pc:Postcode {value: row.POSTCODE}) MERGE (a)-[:HAS_POSTCODE]->(pc) MERGE (a)-[:HAS_OUT_CODE]->(pc))
+FOREACH (ignoreMe in CASE WHEN exists(row.ADDRESS_LINE_1) AND row.ADDRESS_LINE_1<> ""  THEN [1] ELSE [] END | MERGE (al:AddressLine1 {value: row.ADDRESS_LINE_1}) MERGE (a)-[:HAS_ADDRESS_LINE_1]->(al))
 } IN TRANSACTIONS OF 100 ROWS
+
+
+//relationships 
+:auto LOAD CSV WITH HEADERS FROM "https://raw.githubusercontent.com/RRajdev/data/main/synbritain_people.csv" AS row WITH row LIMIT 1
+CALL {
+WITH row
+MATCH (p:Person {personId:row.PERSON_ID})
+MATCH (fn:FamilyName {value:row.FAMILYNAME})
+CREATE (p)-[:HAS_FAMILY_NAME]->(fn)
+MATCH (gn:GivenName {value:row.FIRSTNAME})
+CREATE (p)-[:HAS_GIVEN_NAME]->(gn)
+MATCH (dob:DOB {value:row.DOB})
+CREATE (p)-[:HAS_DOB]->(dob)
+MATCH (nino:NINO {value:row.NINO})
+CREATE (p)-[:HAS_NINO]->(nino)
+MATCH (pc:Postcode {value:row.POSTCODE})
+CREATE (p)-[:HAS_POSTCODE]->(pc)
+} IN TRANSACTIONS OF 100 ROWS
+
 
 
 
@@ -24,7 +59,7 @@ RETURN p1.name AS from, p2.name AS to,
    gds.alpha.similarity.cosine(p1L, p2L) AS cosine;
 
 
-   CALL gds.graph.drop('famiyNameGraph', false) YIELD graphName;
+   CALL gds.graph.drop('personWeighted', false) YIELD graphName;
 
 
 
@@ -57,8 +92,8 @@ CALL gds . Graph .create('person',
 
 
 CALL gds.graph.project(
-    'person',
-    ['Person', 'GivenName', 'FamilyName', 'DOB'],
+    'personWeighted',
+    ['Person', 'GivenName', 'FamilyName', 'DateOfBirth', 'Nino', 'PostcodeOuter'],
     {
         HAS_GIVEN_NAME: {
             type: 'HAS_GIVEN_NAME',
@@ -66,7 +101,7 @@ CALL gds.graph.project(
             properties: {
                 strength: {
                     property: 'weight',
-                    defaultValue: 3.0
+                    defaultValue: 2
                 }
             }
         },
@@ -76,23 +111,44 @@ CALL gds.graph.project(
             properties: {
                 strength: {
                     property: 'weight',
-                    defaultValue: 5.0
+                    defaultValue: 4
                 }
             }
         }, 
-        HAS_DOB: {
-            type: 'HAS_DOB',
+        HAS_DATE_OF_BIRTH: {
+            type: 'HAS_DATE_OF_BIRTH',
             orientation: 'NATURAL',
             properties: {
                 strength: {
                     property: 'weight',
-                    defaultValue: 7.0
+                    defaultValue: 5
+                }
+            }
+        }, 
+        HAS_NINO: {
+            type: 'HAS_NINO',
+            orientation: 'NATURAL',
+            properties: {
+                strength: {
+                    property: 'weight',
+                    defaultValue: 6
+                }
+            }
+        },
+        HAS_POSTCODE_OUTER: {
+            type: 'HAS_POSTCODE_OUTER',
+            orientation: 'NATURAL',
+            properties: {
+                strength: {
+                    property: 'weight',
+                    defaultValue: 7
                 }
             }
         }
 
     }
 );
+
 
 CALL gds.nodeSimilarity.stream('firstNameGraph')
 YIELD node1, node2, similarity
@@ -104,18 +160,175 @@ ORDER BY similarity DESCENDING, Person1, Person2
 
 CALL gds.nodeSimilarity.stream('person',
     {
+    relationshipWeightProperty: 'strength',
     similarityCutoff: 0
   }
 )
 YIELD node1, node2, similarity
-RETURN gds.util.asNode(node1).familyName AS Person1, 
-       gds.util.asNode(node2).familyName AS Person2, similarity
+RETURN gds.util.asNode(node1).value AS Person1, 
+       gds.util.asNode(node2).value AS Person2, similarity
 ORDER BY similarity DESCENDING, Person1, Person2
 
 
-CALL gds.nodeSimilarity.write('person', {
+CALL gds.nodeSimilarity.write('personWeighted', {
     writeRelationshipType: 'SIMILAR',
-    writeProperty: 'score'
+    writeProperty: 'score', 
+    relationshipWeightProperty: 'strength',
+    similarityCutoff: 0.8
+
 })
 YIELD nodesCompared, relationshipsWritten
+
+
+
+"Person1"     │"Person2"     │"similarity"        │
+╞══════════════╪══════════════╪════════════════════╡
+│"Martin Smith"│"Marty Smith" │0.9230769230769231  │
+├──────────────┼──────────────┼────────────────────┤
+│"Marty Smith" │"Martin Smith"│0.9230769230769231  │
+├──────────────┼──────────────┼────────────────────┤
+│"Martin Smith"│"Martin Smyth"│0.47058823529411764 │
+├──────────────┼──────────────┼────────────────────┤
+│"Martin Smyth"│"Martin Smith"│0.47058823529411764 │
+├──────────────┼──────────────┼────────────────────┤
+│"Martin Smyth"│"Marty Smith" │0.4117647058823529  │
+├──────────────┼──────────────┼────────────────────┤
+│"Marty Smith" │"Martin Smyth"│0.4117647058823529  │
+├──────────────┼──────────────┼────────────────────┤
+│"Marty Jones" │"Marty Smith" │0.043478260869565216│
+├──────────────┼──────────────┼────────────────────┤
+│"Marty Smith" │"Marty Jones" │0.043478260869565216│
+├──────────────┼──────────────┼────────────────────┤
+│"Martin Smith"│"Marty Jones" │0.041666666666666664│
+├──────────────┼──────────────┼────────────────────┤
+│"Marty Jones" │"Martin Smith"│0.041666666666666664│
+├──────────────┼──────────────┼────────────────────┤
+│"Martin Smyth"│"Marty Jones" │0.0                 │
+├──────────────┼──────────────┼────────────────────┤
+│"Marty Jones" │"Martin Smyth"│0.0                 │
+└──────────────┴──────────────┴────────────────────┘
+
+
+
+
+CALL gds.graph.project(
+    'wccPerson',
+    'Person',
+    'SIMILAR',
+    {
+        nodeProperties: 'seed_label',
+        relationshipProperties: 'score'
+    }
+)
+
+
+CALL gds.labelPropagation.write('wccPerson', { writeProperty: 'community' })
+YIELD communityCount, ranIterations, didConverge
+
+
+
+CALL apoc.text.phonetic('Smith') YIELD value
+WITH value AS search_str
+MATCH (n:Person) - [:HAS_FAMILY_NAME] -> (fn:FamilyName)
+CALL apoc.text.phonetic(fn.value) YIELD value
+WITH value AS match_str, search_str, n
+WHERE search_str = match_str
+WITH COLLECT(DISTINCT n.community) AS coms
+UNWIND coms AS c
+MATCH (n:Person) - [:HAS_FAMILY_NAME] -> (fn:FamilyName)
+WHERE n.community = c
+RETURN n
+
+
+call db.schema.visualization 
+
+
+
+//cosine similarity 
+CALL gds.fastRP.write('personWeighted',
+  {
+    embeddingDimension: 10,
+    randomSeed: 42, 
+    writeProperty: 'embedding',
+    iterationWeights: [1.0],
+    relationshipWeightProperty: 'weight'
+  }
+)
+YIELD nodePropertiesWritten
+
+
+MATCH (p1:Person) 
+MATCH (p2:Person)
+WHERE p1 <> p2
+WITH p1.value as person1, p1.embedding as p1Data, p2.value as person2, p2.embedding as p2Data
+RETURN person1, person2, gds.similarity.cosine(
+ p1Data, p2Data
+) AS cosineSimilarity
+order by cosineSimilarity desc
+
+
+
+╒══════════════╤══════════════╤═══════════════════╕
+│"person1"     │"person2"     │"cosineSimilarity" │
+╞══════════════╪══════════════╪═══════════════════╡
+│"Martin Smith"│"Marty Smith" │0.9713334745542858 │
+├──────────────┼──────────────┼───────────────────┤
+│"Marty Smith" │"Martin Smith"│0.9713334745542858 │
+├──────────────┼──────────────┼───────────────────┤
+│"Marty Smith" │"Martin Smyth"│0.7810787718395957 │
+├──────────────┼──────────────┼───────────────────┤
+│"Martin Smyth"│"Marty Smith" │0.7810787718395957 │
+├──────────────┼──────────────┼───────────────────┤
+│"Martin Smith"│"Martin Smyth"│0.7778088026126259 │
+├──────────────┼──────────────┼───────────────────┤
+│"Martin Smyth"│"Martin Smith"│0.7778088026126259 │
+├──────────────┼──────────────┼───────────────────┤
+│"Marty Smith" │"Marty Jones" │-0.2733679964071799│
+├──────────────┼──────────────┼───────────────────┤
+│"Marty Jones" │"Marty Smith" │-0.2733679964071799│
+├──────────────┼──────────────┼───────────────────┤
+│"Martin Smyth"│"Marty Jones" │-0.2952528483379469│
+├──────────────┼──────────────┼───────────────────┤
+│"Marty Jones" │"Martin Smyth"│-0.2952528483379469│
+├──────────────┼──────────────┼───────────────────┤
+│"Martin Smith"│"Marty Jones" │-0.2963879347852323│
+├──────────────┼──────────────┼───────────────────┤
+│"Marty Jones" │"Martin Smith"│-0.2963879347852323│
+└──────────────┴──────────────┴───────────────────┘
+
+
+
+
+MATCH (p1:Person) 
+MATCH (p2:Person)
+WHERE p1 <> p2
+WITH p1 as person1, p1.embedding as p1Data, p2 as person2, p2.embedding as p2Data
+WITH person1, person2, gds.similarity.cosine(
+ p1Data, p2Data
+) AS cosineSimilarity
+WHERE cosineSimilarity > 0.8
+MERGE (person1) -[s:IS_SIMILAR]- (person2)
+RETURN person1, s, person2
+
+
+
+CALL dbms.setConfigValue('dbms.transaction.timeout','0')
+
+
+
+
+match (p:Person)-[:HAS_FAMILY_NAME]->(fn:FamilyName {value: 'Simpson'}) 
+WHERE
+exists((p)-[:HAS_ADDRESS]-(:Address)-[:HAS_POSTCODE]-(:Postcode {value: 'DK88 3OM'}))
+OPTIONAL MATCH (p)-[:HAS_NINO]-(nino)
+OPTIONAL MATCH (p)-[:HAS_GIVEN_NAME]-(givenName)
+OPTIONAL MATCH (p)-[:HAS_ADDRESS]-(:Address)-[:HAS_POSTCODE]->(postcode)
+OPTIONAL MATCH (p)-[:HAS_FAMILY_NAME]-(familyName)
+USING JOIN on p
+RETURN distinct p,  
+collect(distinct nino) as ninos,  
+collect(distinct givenName) as givenNames, 
+collect(distinct familyName) as familyName,  
+collect(distinct postcode) as postcodes
+
 
